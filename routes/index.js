@@ -62,5 +62,9 @@ const MerchantTradeNo = `1234567${new Date().getTime()}`
   console.log(html);
   res.render('checkout', { title: 'Express' , html});
 });
+router.post('/return', function(req, res, next) {
+  console.log("req.body:",req.body);
+  res.render('1|OK');
+});
 
 module.exports = router;
