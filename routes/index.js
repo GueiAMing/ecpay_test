@@ -1,70 +1,82 @@
 var express = require('express');
 var router = express.Router();
-const ecpay_payment = require('ecpay_aio_nodejs');
-require('dotenv').config();
-// console.log(process.env);
-const { MERCHANTID, HASHKEY, HASHIV, HOST} = process.env;
-const options = {
-  "OperationMode": "Test", //Test or Production
-  "MercProfile": {
-    "MerchantID": MERCHANTID,
-    "HashKey": HASHKEY,
-    "HashIV": HASHIV
-  },
-  "IgnorePayment": [
-//    "Credit",
-//    "WebATM",
-//    "ATM",
-//    "CVS",
-//    "BARCODE",
-//    "AndroidPay"
-  ],
-  "IsProjectContractor": false
-}
+const ecpayService = require('../services/ecpayService'); // Service for ECPay related logic
+
+// Note: dotenv.config() is called in ecpayService.js and app.js, so not needed here.
+// Note: HOST from process.env is used within ecpayService.js.
+
 /* GET home page. */
+// This route renders the main landing page of the application.
 router.get('/', function(req, res, next) {
-  res.render('index', { title: 'Express' });
+  res.render('index', { title: 'Express ECPay Sample' }); // Render the 'index.ejs' view
 });
 
+/* GET /checkout - Initiates the ECPay payment process. */
+// This route prepares payment data and calls the ECPay service to generate
+// the payment form, then renders a page that auto-submits this form to ECPay.
 router.get('/checkout', function(req, res, next) {
-  const MerchantTradeDate = new Date().toLocaleString('zh-TW', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
-}).replace(/\//g, '/');
-const MerchantTradeNo = `1234567${new Date().getTime()}`
-  const base_param = {
-    MerchantTradeNo: MerchantTradeNo, //請帶20碼uid, ex: f0a0d7e9fae1bb72bc93
-    MerchantTradeDate: MerchantTradeDate, //ex: 2017/02/13 15:45:30
-    TotalAmount: '100',
-    TradeDesc: '測試交易描述',
-    ItemName: '測試商品等',
-    ReturnURL: `${HOST}/return`,
-    // ChooseSubPayment: '',
-    // OrderResultURL: 'http://192.168.0.1/payment_result',
-    // NeedExtraPaidInfo: '1',
-    // ClientBackURL: 'https://www.google.com',
-    // ItemURL: 'http://item.test.tw',
-    // Remark: '交易備註',
-    // HoldTradeAMT: '1',
-    // StoreID: '',
-    // CustomField1: '',
-    // CustomField2: '',
-    // CustomField3: '',
-    // CustomField4: ''
+  // Define checkout data. In a real application, this would typically come from
+  // the user's session, a database, or the request body (e.g., from a shopping cart).
+  const checkoutData = {
+    orderId: `WebAppOrder${new Date().getTime()}`, // Example Order ID - should be unique for each transaction.
+    totalAmount: '250',                           // Example total amount for the transaction.
+    description: 'WebApp Transaction Description',  // Description of the transaction.
+    items: 'Product A x 1, Product B x 2'         // Item details (name, quantity). ECPay format: "Item1#Item2..."
+    // ReturnURL is configured within the ecpayService.
   };
-  const create = new ecpay_payment(options);
-  const html = create.payment_client.aio_check_out_all(base_param)
-  console.log(html);
-  res.render('checkout', { title: 'Express' , html});
+
+  try {
+    // Call the service to initiate checkout and get the ECPay HTML form.
+    const html = ecpayService.initiateCheckout(checkoutData);
+    // console.info("Generated ECPay HTML:", html); // Useful for debugging, consider removing for production.
+    
+    // Render the 'checkout.ejs' view, passing the generated HTML.
+    // The view will typically place this HTML in a way that it auto-submits.
+    res.render('checkout', { title: 'ECPay Checkout', html });
+  } catch (error) {
+    // Handle any errors that occur during payment initiation.
+    console.error("Error in /checkout route during payment initiation:", error);
+    // Render a generic error page for the user.
+    // In development, the error object itself might be passed for more details.
+    res.status(500).render('error', { 
+      message: 'Payment initiation failed. Please try again later.', 
+      error: process.env.NODE_ENV === 'development' ? error : {} 
+    });
+  }
 });
+
+/* POST /return - Handles ECPay's server-to-server return notification. */
+// ECPay sends a POST request to this URL (specified as ReturnURL) after the payment process.
+// This route is responsible for verifying the received data's integrity and authenticity.
 router.post('/return', function(req, res, next) {
-  console.log("req.body:",req.body);
-  res.render('1|OK');
+  // Log the received request body from ECPay. 
+  // Important: Be cautious about logging entire request bodies in production due to potential sensitive data and log volume.
+  console.info("ECPay Return POST request body:", req.body); 
+  
+  try {
+    // Call the service to verify the payload, including CheckMacValue.
+    const verificationResult = ecpayService.verifyReturnPayload(req.body);
+
+    if (verificationResult.success) {
+      // If CheckMacValue is verified successfully.
+      console.info('ECPay Return: CheckMacValue verified successfully via service. Responding with "1|OK".');
+      // ECPay expects a response of "1|OK" to acknowledge successful receipt and verification.
+      res.status(200).send('1|OK');
+      // TODO: Add further business logic here, e.g., update order status in database, send confirmation email.
+    } else {
+      // If CheckMacValue verification fails.
+      // Log the specific error details returned from the service.
+      console.error('ECPay Return: CheckMacValue verification failed via service. Details:', verificationResult);
+      // Respond to ECPay with "0|ERROR_MESSAGE" to indicate failure.
+      res.status(200).send(`0|ERROR ${verificationResult.error || 'Checksum verification failed'}`);
+    }
+  } catch (error) {
+    // Catch any unexpected errors that occur in the service layer or within this route handler.
+    console.error("Unexpected error in /return route processing:", error);
+    // Respond to ECPay with a generic error message.
+    // ECPay expects a "0|..." or "1|..." response format. A 500 status might not be correctly interpreted by ECPay.
+    res.status(200).send('0|ERROR Internal server error during processing');
+  }
 });
 
 module.exports = router;
