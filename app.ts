@@ -7,12 +7,15 @@ import dotenv from 'dotenv';
 import indexRouter from './routes/index';
 import usersRouter from './routes/users';
 
+import path from 'path';
+
 dotenv.config();
 
 const app = express();
 
-app.set('views', __dirname + '/../views');
+app.set('views', path.join(process.cwd(), 'views'));
 app.set('view engine', 'ejs');
+;
 
 app.use(logger('dev'));
 app.use(express.json());
